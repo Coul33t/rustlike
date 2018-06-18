@@ -1,4 +1,7 @@
 extern crate tcod;
+extern crate rand;
+
+use rand::Rng;
 
 use tcod::console::*;
 use tcod::colors::{self, Color};
@@ -13,7 +16,12 @@ const MAP_H: i32 = CONSOLE_H - 5;
 const COLOR_DARK_GROUND: Color = Color {r:75, g:75, b:75};
 const COLOR_DARK_WALL: Color = Color {r:25, g:25, b:25};
 
-#[derive(Clone, Copy, Debug)]
+const MIN_ROOM_SIZE: i32 = 3;
+const MAX_ROOM_SIZE: i32 = 15;
+const MAX_ROOM_NUMBER: i32 = 30;
+const MAX_ROOM_DISTANCE: i32 = 999;
+
+#[derive(PartialEq, Clone, Copy, Debug)]
 struct Rect {
     x1: i32,
     y1: i32,
@@ -24,6 +32,40 @@ struct Rect {
 impl Rect {
     pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
         Rect{x1: x, y1: y, x2: x + w, y2: y + h}
+    }
+
+    pub fn center(&self) -> (i32, i32) {
+        let center_x = (self.x1 + self.x2) / 2;
+        let center_y = (self.y1 + self.y2) / 2;
+        (center_x, center_y)
+    }
+
+    pub fn intersect_with(&self, other: &Rect) -> bool {
+        println!("PWET");
+        (self.x1 <= other.x2) && (self.x2 >= other.x1) &&
+        (self.y1 <= other.y2) && (self.y2 >= other.y1)
+    }
+
+    pub fn distance_to(&self, other: &Rect) -> i32 {
+        let s_center = self.center();
+        let o_center = other.center();
+        (((o_center.0 - s_center.0).pow(2) + (o_center.1 - s_center.1).pow(2)) as f64).sqrt().round() as i32
+    }
+
+    pub fn find_closest(&self, vector: &Vec<Rect>) -> usize {
+        let mut i = 0;
+        let mut max_dst = std::cmp::max(MAP_W, MAP_H) + 1;
+
+        for (j, value) in vector.iter().enumerate() {
+            if self != value {
+                if self.distance_to(value) < max_dst {
+                    max_dst = self.distance_to(value);
+                    i = j;
+                }
+            }
+        }
+
+        i
     }
 }
 
@@ -55,16 +97,61 @@ fn create_room(room: Rect, map: &mut Map) {
     }
 }
 
-fn make_map() -> Map {
+fn make_h_tunnel(y: i32, x1: i32, x2: i32, map: &mut Map) {
+    for x in std::cmp::min(x1, x2) .. std::cmp::max(x1, x2) {
+        map[x as usize][y as usize] = Tile::empty();
+    }
+}
+
+fn make_v_tunnel(x: i32, y1: i32, y2: i32, map: &mut Map) {
+    for y in std::cmp::min(y1, y2) .. std::cmp::max(y1, y2) {
+        map[x as usize][y as usize] = Tile::empty();
+    }
+}
+
+
+fn make_map() -> (Map, (i32, i32)) {
     let mut map = vec![vec![Tile::wall(); MAP_H as usize]; MAP_W as usize];
+    let mut rooms = vec![];
+    let mut starting_pos = (0, 0);
 
-    let room1 = Rect::new(10,10,20,20);
-    let room2 = Rect::new(35,35,15,5);
+    for _ in 0 .. MAX_ROOM_NUMBER {
+        let w = rand::thread_rng().gen_range(MIN_ROOM_SIZE, MAX_ROOM_SIZE);
+        let h = rand::thread_rng().gen_range(MIN_ROOM_SIZE, MAX_ROOM_SIZE);
 
-    create_room(room1, &mut map);
-    create_room(room2, &mut map);
+        let x = rand::thread_rng().gen_range(0, MAP_W - w);
+        let y = rand::thread_rng().gen_range(0, MAP_H - h);
 
-    map
+        let new_room = Rect::new(x, y, w, h);
+
+        let inter_failed = rooms.iter().any(|other_room| new_room.intersect_with(other_room));
+        let dst_success = rooms.iter().any(|other_room| new_room.distance_to(other_room) < MAX_ROOM_DISTANCE);
+
+        if !inter_failed && dst_success {
+            create_room(new_room, &mut map);
+            let (new_x, new_y) = new_room.center();
+
+            if rooms.is_empty() {
+                starting_pos = (new_x, new_y);
+            } else {
+                let idx = new_room.find_closest(&rooms);
+                let (closer_x, closer_y) = rooms[idx].center();
+
+                if rand::random() {
+                    make_h_tunnel(closer_y, closer_x, new_x, &mut map);
+                    make_v_tunnel(new_x, closer_y, new_y, &mut map);
+                } else {
+                    make_v_tunnel(closer_x, closer_y, new_y, &mut map);
+                    make_h_tunnel(new_y, closer_x, new_x, &mut map);
+                }
+
+            }
+
+            rooms.push(new_room);
+        }
+    }
+
+    (map, starting_pos)
 }
 
 #[derive(Debug)]
@@ -165,11 +252,11 @@ fn main() {
 
     tcod::system::set_fps(FPS_LIMIT);
 
-    let player = Object::new(20, 20, '@', colors::WHITE);
-    let npc = Object::new(25, 25, 'z', colors::YELLOW);
-    let mut objects = [player, npc];
+    let (map, (p_x, p_y)) = make_map();
 
-    let map = make_map();
+    let player = Object::new(p_x, p_y, '@', colors::WHITE);
+    let npc = Object::new(p_x+1, p_y+1, 'z', colors::YELLOW);
+    let mut objects = [player, npc];
 
     while !root.window_closed() {
         root.clear();
